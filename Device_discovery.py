@@ -1,58 +1,83 @@
-from scapy.all import srp, Ether, ARP
+import nmap
 import sys
+import socket
+import psutil
+import ipaddress
+from scapy.all import conf, get_if_addr
 
-def arp_scan(target_ip_range):
-    """
-    Performs an ARP scan on the specified IP range.
-    """
-    print(f"[*] Scanning for devices on {target_ip_range}...")
+def get_local_subnet():
+    # Detects local subnet by matching the active local IP.
+    try:
+        local_ip = get_if_addr(conf.iface)
+        interfaces = psutil.net_if_addrs()
+        for iface_name, addresses in interfaces.items():
+            for addr in addresses:
+                if addr.family == socket.AF_INET and addr.address == local_ip:
+                    netmask = addr.netmask
+                    network = ipaddress.IPv4Network(f"{local_ip}/{netmask}", strict=False)
+                    return str(network)
+        return None
+    except Exception as e:
+        print(f"[-] Auto-detection failed: {e}")
+        return None
 
-    # 1. Create the Ether frame
-    # We set the destination MAC (dst) to 'ff:ff:ff:ff:ff:ff' (broadcast)
-    ether_frame = Ether(dst="ff:ff:ff:ff:ff:ff")
-
-    # 2. Create the ARP packet
-    # pdst is the target IP range we want to query (e.g., 192.168.1.0/24)
-    arp_packet = ARP(pdst=target_ip_range)
-
-    # 3. Combine the two (Ether + ARP)
-    packet = ether_frame / arp_packet
-
-    # 4. Send and receive the packets
-    # timeout=1: Wait max 1 second for a response
-    # verbose=0: Don't show Scapy's internal output
-    # 
-    # REPLACE "Your Interface Name" with the actual name from Step 1
-    interface_name = "Qualcomm QCA9377 802.11ac Wireless Adapter" 
-    answered_list = srp(packet, timeout=1, verbose=0, iface=interface_name)[0]
-
-    devices = []
-    for sent, received in answered_list:
-        devices.append({
-            'ip': received.psrc,  # Source IP of the device that replied
-            'mac': received.hwsrc # MAC address of the device that replied
-        })
+def nmap_network_scanner(target_range):
+    # Uses the Nmap engine to discover hosts and services efficiently.
+    nm = nmap.PortScanner()
     
-    return devices
+    print(f"[*] Nmap is scanning {target_range}...")
+    print(f"[*] This may take a moment depending on the number of devices...")
 
-# --- Main execution block ---
+    # Nmap Arguments:
+    # -sV: Service/Version detection
+    # -T4: Faster timing
+    # -PR: ARP discovery (best for local networks)
+    scan_args = '-sV -T4 -PR'
+    
+    try:
+        nm.scan(hosts=target_range, arguments=scan_args)
+    except Exception as e:
+        print(f"[-] Nmap error: {e}")
+        return
+
+    for host in nm.all_hosts():
+        hostname = nm[host].hostname() or "Unknown"
+        mac = nm[host]['addresses'].get('mac', 'N/A')
+        
+        print("\n{:<15} {:<17} {:<20}".format("IP Address", "MAC Address", "Hostname"))
+        print("-" * 55)
+        print("{:<15} {:<17} {:<20}".format(host, mac, hostname))
+
+        if 'tcp' in nm[host]:
+            print(f"\n✅ Scan Results for {host}:")
+            print("{:<12} {:<10} {:<30}".format("PORT", "STATUS", "SERVICE/VERSION"))
+            print("-" * 65)
+
+            for port in sorted(nm[host]['tcp'].keys()):
+                port_data = nm[host]['tcp'][port]
+                state = port_data['state']
+                
+                # Construct a clean version string from Nmap's data
+                product = port_data.get('product', '')
+                version = port_data.get('version', '')
+                extrainfo = port_data.get('extrainfo', '')
+                service_info = f"{product} {version} {extrainfo}".strip() or "Unknown Service"
+                
+                print("{:<12} {:<10} {:<30}".format(f"{port}/tcp", state, service_info))
+
+        else:
+            print(f"\n❌ No open ports found on {host}.")
+
 if __name__ == "__main__":
-    # Example Target Range (REPLACE WITH YOUR LOCAL SUBNET!)
-    # Use CIDR notation (e.g., '192.168.1.0/24')
-    target_range = "192.168.1.0/24" 
+    # Ensure nmap is installed on the system
+    # Run as sudo/administrator for ARP and Version scanning
+    
+    target_range = get_local_subnet()
+    
+    if not target_range:
+        print("[-] Please enter your details manually. You can find your local IP and subnet mask by running ipconfig (Windows) or ifconfig (Mac/Linux) in your terminal.")
+        local_ip = input("Enter local IP address (e.g., 192.168.1.14): ")
+        subnet_mask = input("Enter subnet mask (e.g., 255.255.255.0): ")
+        target_range = f"{local_ip}/{subnet_mask}"
 
-    # Check if run as root/admin (Scapy needs privileged access)
-    if not sys.platform.startswith('win') and sys.stdin.isatty():
-        try:
-            if sys.stdin.fileno() != 0:
-                print("[-] You might need to run this with 'sudo' or as an administrator.")
-        except AttributeError:
-             pass # Windows doesn't usually hit this.
-
-    active_devices = arp_scan(target_range)
-
-    print("\n--- Found Devices ---")
-    print("{:<15} {:<17}".format("IP Address", "MAC Address"))
-    print("-" * 32)
-    for device in active_devices:
-        print("{:<15} {:<17}".format(device['ip'], device['mac']))
+    nmap_network_scanner(target_range)
