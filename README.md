@@ -41,10 +41,10 @@ Because the script uses raw sockets for ARP discovery (`-PR`) and service finger
 
 2. **Run the scanner:**
 
-   # Linux/macOS
+   ### Linux/macOS
     `sudo python3 scanner.py`
 
-   # Windows (Run terminal as Admin)
+   ### Windows (Run terminal as Admin)
     `python scanner.py`
 
 3. **Output:**
